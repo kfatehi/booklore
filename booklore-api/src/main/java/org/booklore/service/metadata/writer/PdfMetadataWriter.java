@@ -70,14 +70,16 @@ public class PdfMetadataWriter implements MetadataWriter {
             log.warn("Could not create PDF temp backup for {}: {}", file.getName(), e.getMessage());
         }
 
-        try (PDDocument pdf = Loader.loadPDF(file, IOUtils.createTempFileOnlyStreamCache())) {
-            pdf.setAllSecurityToBeRemoved(true);
-            applyMetadataToDocument(pdf, metadataEntity, clear);
-            tempFile = File.createTempFile("pdfmeta-", ".pdf");
-            // PDFBox 3.x saves in compressed mode by default
-            pdf.save(tempFile);
-            Files.move(tempFile.toPath(), filePath, StandardCopyOption.REPLACE_EXISTING);
-            tempFile = null; // Prevent deletion in finally block after successful move
+        try {
+            try (PDDocument pdf = Loader.loadPDF(file, IOUtils.createTempFileOnlyStreamCache())) {
+                pdf.setAllSecurityToBeRemoved(true);
+                applyMetadataToDocument(pdf, metadataEntity, clear);
+                tempFile = File.createTempFile("pdfmeta-", ".pdf", file.getParentFile());
+                // PDFBox 3.x saves in compressed mode by default
+                pdf.save(tempFile);
+            }
+            // Copy after PDDocument is closed so the original file is no longer held open
+            Files.copy(tempFile.toPath(), filePath, StandardCopyOption.REPLACE_EXISTING);
             log.info("Successfully embedded metadata into PDF: {}", file.getName());
         } catch (Exception e) {
             log.warn("Failed to write metadata to PDF {}: {}", file.getName(), e.getMessage(), e);
