@@ -146,7 +146,11 @@ public class PdfMetadataWriter implements MetadataWriter {
 
         helper.copyTitle(clear != null && clear.isTitle(), title -> info.setTitle(title != null ? title : ""));
         helper.copyPublisher(clear != null && clear.isPublisher(), pub -> info.setProducer(pub != null ? pub : ""));
-        helper.copyAuthors(clear != null && clear.isAuthors(), authors -> info.setAuthor(authors != null ? String.join(", ", authors) : ""));
+        helper.copyAuthors(clear != null && clear.isAuthors(), authors -> {
+            String authorStr = authors != null ? String.join(", ", authors) : "";
+            log.debug("Setting PDF Info Dict author to: '{}'", authorStr);
+            info.setAuthor(authorStr);
+        });
         helper.copyPublishedDate(clear != null && clear.isPublishedDate(), date -> {
             Calendar cal = Calendar.getInstance();
             cal.setTimeInMillis((date != null ? date : ZonedDateTime.now().toLocalDate())
@@ -192,10 +196,13 @@ public class PdfMetadataWriter implements MetadataWriter {
             // Clean author names (normalize whitespace)
             helper.copyAuthors(clear != null && clear.isAuthors(), authors -> {
                 if (authors != null && !authors.isEmpty()) {
+                    log.debug("Setting XMP dc:creator to: {}", authors);
                     authors.stream()
                         .map(name -> name.replaceAll("\\s+", " ").trim())
                         .filter(name -> !name.isBlank())
                         .forEach(dc::addCreator);
+                } else {
+                    log.debug("No authors to write to XMP dc:creator");
                 }
             });
 
@@ -216,20 +223,6 @@ public class PdfMetadataWriter implements MetadataWriter {
 
             byte[] newXmpBytes = addCustomIdentifiersToXmp(baseXmpBytes, entity, helper, clear);
 
-            byte[] existingXmpBytes = null;
-            PDMetadata existingMetadata = pdf.getDocumentCatalog().getMetadata();
-            if (existingMetadata != null) {
-                try {
-                    existingXmpBytes = existingMetadata.toByteArray();
-                } catch (IOException ignore) {
-                }
-            }
-
-            if (!isXmpMetadataDifferent(existingXmpBytes, newXmpBytes)) {
-                log.info("XMP metadata unchanged, skipping write");
-                return;
-            }
-
             PDMetadata pdMetadata = new PDMetadata(pdf);
             pdMetadata.importXMPMetadata(newXmpBytes);
             pdf.getDocumentCatalog().setMetadata(pdMetadata);
@@ -237,6 +230,14 @@ public class PdfMetadataWriter implements MetadataWriter {
             log.info("XMP metadata updated for PDF");
         } catch (Exception e) {
             log.warn("Failed to embed XMP metadata: {}", e.getMessage(), e);
+            // Clear any existing XMP so stale data (e.g. old author) doesn't override
+            // the Info Dictionary values that were already set above
+            try {
+                pdf.getDocumentCatalog().setMetadata(null);
+                log.info("Cleared stale XMP metadata from PDF catalog");
+            } catch (Exception ex) {
+                log.warn("Failed to clear stale XMP metadata: {}", ex.getMessage());
+            }
         }
     }
 
@@ -440,22 +441,6 @@ public class PdfMetadataWriter implements MetadataWriter {
         
         elem.appendChild(rdfBag);
         parent.appendChild(elem);
-    }
-
-    private boolean isXmpMetadataDifferent(byte[] existingBytes, byte[] newBytes) {
-        if (existingBytes == null || newBytes == null) return true;
-        try {
-            DocumentBuilder builder = SecureXmlUtils.createSecureDocumentBuilder(false);
-            Document doc1 = builder.parse(new ByteArrayInputStream(existingBytes));
-            Document doc2 = builder.parse(new ByteArrayInputStream(newBytes));
-            return !Objects.equals(
-                    doc1.getDocumentElement().getTextContent().trim(),
-                    doc2.getDocumentElement().getTextContent().trim()
-            );
-        } catch (Exception e) {
-            log.warn("XMP diff failed: {}", e.getMessage());
-            return true;
-        }
     }
 
     /**
